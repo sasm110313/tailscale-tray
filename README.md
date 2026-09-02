@@ -40,31 +40,23 @@ Before installing, you must have:
 
 ## 🚀 Install
 
-### Fedora / RHEL / CentOS
+### Method 1 — Git clone (recommended)
 
 ```bash
-git clone https://github.com/youruser/tailscale-tray
+git clone https://github.com/sasm110313/tailscale-tray
 cd tailscale-tray
 sudo ./install.sh
 ```
 
-### Ubuntu / Debian / Linux Mint
+The installer **auto-detects your distro** (Fedora, Ubuntu, Debian, Arch, openSUSE...) and installs the correct dependencies — and can even install Tailscale for you if it's missing.
+
+### Method 2 — Quick install (one-liner)
 
 ```bash
-git clone https://github.com/youruser/tailscale-tray
-cd tailscale-tray
-sudo ./install.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/sasm110313/tailscale-tray/main/setup.sh)
 ```
 
-### Arch / Manjaro
-
-```bash
-git clone https://github.com/youruser/tailscale-tray
-cd tailscale-tray
-sudo ./install.sh
-```
-
-The installer **auto-detects** your distro and installs the correct dependencies, and can even install Tailscale for you if it's missing.
+The one-liner downloads `setup.sh`, clones the repo, and runs the same installation automatically. Needs `git` + `curl`.
 
 ---
 
