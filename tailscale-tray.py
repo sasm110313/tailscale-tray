@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
 Tailscale Tray Manager for Linux
-A lightweight system tray application to manage Tailscale VPN exit node.
+A lightweight, powerful system tray application to manage Tailscale VPN exit node,
+auto-discover exit nodes in your tailnet, toggle LAN access, and monitor status.
 
 Config file: ~/.config/tailscale-tray/config.conf
-  [tailscale]
-  exit_node = <IP or hostname>
 """
 
 import gi
@@ -18,6 +17,7 @@ import threading
 import signal
 import json
 import os
+import shutil
 import configparser
 from datetime import datetime
 
@@ -34,20 +34,29 @@ ICON_CONNECTING = "network-transmit-receive"
 CONNECT_ICON = "go-next"
 DISCONNECT_ICON = "process-stop"
 
-# tailscale binary location (with fallbacks for different distros)
-TAILSCALE_BIN = None
-for cand in ("/usr/bin/tailscale", "/usr/local/bin/tailscale", "/bin/tailscale"):
-    if os.path.exists(cand):
-        TAILSCALE_BIN = cand
-        break
-if not TAILSCALE_BIN:
-    TAILSCALE_BIN = "tailscale"  # fall back to PATH
+# tailscale binary location resolution
+def find_tailscale_bin():
+    found = shutil.which("tailscale")
+    if found:
+        return found
+    for cand in ("/usr/bin/tailscale", "/usr/local/bin/tailscale", "/bin/tailscale", "/snap/bin/tailscale"):
+        if os.path.exists(cand):
+            return cand
+    return "tailscale"
+
+TAILSCALE_BIN = find_tailscale_bin()
 
 DEFAULT_CONFIG = """[tailscale]
 # Exit node IP address or hostname to connect to.
 # Leave empty to have no exit node configured by default.
-# Example: exit_node = 100.82.248.81
+# Example: exit_node = 100.64.0.1
 exit_node =
+
+# Allow access to local network (LAN) when using exit node
+allow_lan = false
+
+# Auto-connect configured exit node on application startup
+auto_connect = false
 
 [options]
 # Automatically disconnect the current exit node when quitting
@@ -79,19 +88,27 @@ def ensure_config_file():
 
 def load_config():
     config = configparser.ConfigParser()
-    exit_node = ""
+    settings = {
+        "exit_node": "",
+        "allow_lan": False,
+        "auto_connect": False,
+        "disconnect_on_quit": False,
+    }
 
     if os.path.exists(CONFIG_FILE):
         try:
             config.read(CONFIG_FILE)
-            exit_node = config.get("tailscale", "exit_node", fallback="").strip()
+            settings["exit_node"] = config.get("tailscale", "exit_node", fallback="").strip()
+            settings["allow_lan"] = config.getboolean("tailscale", "allow_lan", fallback=False)
+            settings["auto_connect"] = config.getboolean("tailscale", "auto_connect", fallback=False)
+            settings["disconnect_on_quit"] = config.getboolean("options", "disconnect_on_quit", fallback=False)
         except Exception as e:
             log(f"Config read error: {e}")
 
-    return exit_node
+    return settings
 
 
-def save_config(exit_node):
+def save_config(settings):
     try:
         os.makedirs(CONFIG_DIR, exist_ok=True)
         config = configparser.ConfigParser()
@@ -99,7 +116,14 @@ def save_config(exit_node):
             config.read(CONFIG_FILE)
         if not config.has_section("tailscale"):
             config.add_section("tailscale")
-        config.set("tailscale", "exit_node", exit_node)
+        if not config.has_section("options"):
+            config.add_section("options")
+
+        config.set("tailscale", "exit_node", settings.get("exit_node", ""))
+        config.set("tailscale", "allow_lan", str(settings.get("allow_lan", False)).lower())
+        config.set("tailscale", "auto_connect", str(settings.get("auto_connect", False)).lower())
+        config.set("options", "disconnect_on_quit", str(settings.get("disconnect_on_quit", False)).lower())
+
         with open(CONFIG_FILE, "w") as f:
             config.write(f)
         return True
@@ -109,15 +133,15 @@ def save_config(exit_node):
 
 
 class ConfigDialog:
-    """A GTK dialog for editing the exit node config."""
+    """A GTK dialog for editing configuration settings."""
 
-    def __init__(self, parent, current_value):
+    def __init__(self, parent, current_settings):
         self.dialog = Gtk.Dialog(
             title="Tailscale Tray - Settings",
             transient_for=parent,
             modal=True,
-            default_width=460,
-            default_height=200,
+            default_width=480,
+            default_height=320,
             flags=0
         )
         self.dialog.add_buttons(
@@ -127,39 +151,50 @@ class ConfigDialog:
 
         box = self.dialog.get_content_area()
         box.set_spacing(12)
-        box.set_margin_top(10)
-        box.set_margin_bottom(10)
-        box.set_margin_left(12)
-        box.set_margin_right(12)
+        box.set_margin_top(14)
+        box.set_margin_bottom(14)
+        box.set_margin_left(16)
+        box.set_margin_right(16)
 
         # Title
         title = Gtk.Label()
-        title.set_markup("<span size='x-large' weight='bold'>Exit Node Settings</span>")
+        title.set_markup("<span size='x-large' weight='bold'>Tailscale Tray Settings</span>")
         title.set_halign(Gtk.Align.START)
         box.pack_start(title, False, False, 0)
 
         # Description
         desc = Gtk.Label()
         desc.set_markup(
-            "Enter the IP address or hostname of the Tailscale node you\n"
-            "want to use as your VPN exit node.\n"
-            "<i>Leave empty to disable the exit node.</i>"
+            "Configure your default exit node IP/hostname and connection behavior."
         )
         desc.set_halign(Gtk.Align.START)
         box.pack_start(desc, False, False, 0)
 
         # Entry with label
         entry_row = Gtk.Box(spacing=8)
-        label = Gtk.Label(label="Exit node:")
+        label = Gtk.Label(label="Default Exit Node:")
         label.set_halign(Gtk.Align.START)
         entry_row.pack_start(label, False, False, 0)
 
         self.entry = Gtk.Entry()
-        self.entry.set_placeholder_text("e.g. 100.82.248.81")
-        self.entry.set_text(current_value)
+        self.entry.set_placeholder_text("e.g. 100.64.0.1 or node-name")
+        self.entry.set_text(current_settings.get("exit_node", ""))
         self.entry.connect("activate", self._on_enter)
         entry_row.pack_start(self.entry, True, True, 0)
         box.pack_start(entry_row, False, False, 0)
+
+        # Checkboxes
+        self.chk_allow_lan = Gtk.CheckButton(label="Allow access to local network (LAN) when connected")
+        self.chk_allow_lan.set_active(current_settings.get("allow_lan", False))
+        box.pack_start(self.chk_allow_lan, False, False, 0)
+
+        self.chk_auto_connect = Gtk.CheckButton(label="Auto-connect exit node on application startup")
+        self.chk_auto_connect.set_active(current_settings.get("auto_connect", False))
+        box.pack_start(self.chk_auto_connect, False, False, 0)
+
+        self.chk_disconnect_quit = Gtk.CheckButton(label="Disconnect exit node on quit")
+        self.chk_disconnect_quit.set_active(current_settings.get("disconnect_on_quit", False))
+        box.pack_start(self.chk_disconnect_quit, False, False, 0)
 
         # Hint
         hint = Gtk.Label()
@@ -177,7 +212,12 @@ class ConfigDialog:
 
     def _on_response(self, dialog, response):
         if response == Gtk.ResponseType.OK:
-            self.result = self.entry.get_text().strip()
+            self.result = {
+                "exit_node": self.entry.get_text().strip(),
+                "allow_lan": self.chk_allow_lan.get_active(),
+                "auto_connect": self.chk_auto_connect.get_active(),
+                "disconnect_on_quit": self.chk_disconnect_quit.get_active(),
+            }
         dialog.destroy()
 
     def run(self):
@@ -189,29 +229,58 @@ class ConfigDialog:
 class TailscaleTray:
     def __init__(self):
         Notify.init(APP_ID)
-        self.exit_node = load_config()
+        self.settings = load_config()
         self.connected = False
         self.current_node = None
-        self._check_real_status()
+        self.tailscale_online = False
+        self.tailnet_name = ""
+        self.my_ip = ""
+        self.discovered_nodes = [] # list of dicts: {'name': str, 'ip': str, 'online': bool, 'is_current': bool}
+        self.is_operating = False
 
         self.indicator = AppIndicator3.Indicator.new(
             APP_ID,
-            ICON_DISCONNECTED if not self.connected else ICON_CONNECTED,
+            ICON_DISCONNECTED,
             AppIndicator3.IndicatorCategory.SYSTEM_SERVICES
         )
         self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
 
+        self._build_menu()
+        
+        # Initial status check & periodic status polling (every 5s)
+        self._async_check_status(first_run=True)
+        GLib.timeout_add_seconds(5, self._periodic_status_check)
+
+        log(f"Started. Default exit_node='{self.settings['exit_node']}', LAN='{self.settings['allow_lan']}'")
+
+    def _build_menu(self):
         self.menu = Gtk.Menu()
 
-        self.status_item = Gtk.MenuItem(label=self._status_text())
+        # Status item
+        self.status_item = Gtk.MenuItem(label="Status: Checking...")
         self.status_item.set_sensitive(False)
         self.menu.append(self.status_item)
 
         self.menu.append(Gtk.SeparatorMenuItem())
 
+        # Exit Node Submenu
+        self.exit_node_menu_item = Gtk.MenuItem(label="Exit Nodes")
+        self.exit_nodes_submenu = Gtk.Menu()
+        self.exit_node_menu_item.set_submenu(self.exit_nodes_submenu)
+        self.menu.append(self.exit_node_menu_item)
+
+        # Allow LAN Access toggle menu item
+        self.lan_item = Gtk.CheckMenuItem(label="Allow Local Network (LAN) Access")
+        self.lan_item.set_active(self.settings.get("allow_lan", False))
+        self.lan_item.connect("toggled", self._on_toggle_lan)
+        self.menu.append(self.lan_item)
+
+        self.menu.append(Gtk.SeparatorMenuItem())
+
+        # Quick Connect/Disconnect Items
         self.connect_item = Gtk.ImageMenuItem(label=self._connect_label())
         self.connect_item.set_image(Gtk.Image.new_from_icon_name(CONNECT_ICON, Gtk.IconSize.MENU))
-        self.connect_item.connect("activate", self._on_connect)
+        self.connect_item.connect("activate", self._on_connect_default)
         self.menu.append(self.connect_item)
 
         self.disconnect_item = Gtk.ImageMenuItem(label="Disconnect Exit Node")
@@ -221,20 +290,21 @@ class TailscaleTray:
 
         self.menu.append(Gtk.SeparatorMenuItem())
 
+        # Settings
         config_item = Gtk.ImageMenuItem(label="Settings...")
         config_item.set_image(Gtk.Image.new_from_icon_name(Gtk.STOCK_PREFERENCES, Gtk.IconSize.MENU))
         config_item.connect("activate", self._on_config)
         self.menu.append(config_item)
 
-        self.menu.append(Gtk.SeparatorMenuItem())
-
+        # Refresh
         check_item = Gtk.ImageMenuItem(label="Refresh Status")
         check_item.set_image(Gtk.Image.new_from_icon_name(Gtk.STOCK_REFRESH, Gtk.IconSize.MENU))
-        check_item.connect("activate", self._on_check)
+        check_item.connect("activate", lambda w: self._async_check_status())
         self.menu.append(check_item)
 
         self.menu.append(Gtk.SeparatorMenuItem())
 
+        # About
         about_item = Gtk.ImageMenuItem(label="About")
         about_item.set_image(Gtk.Image.new_from_icon_name(Gtk.STOCK_ABOUT, Gtk.IconSize.MENU))
         about_item.connect("activate", self._on_about)
@@ -242,6 +312,7 @@ class TailscaleTray:
 
         self.menu.append(Gtk.SeparatorMenuItem())
 
+        # Quit
         quit_item = Gtk.ImageMenuItem(label="Quit")
         quit_item.set_image(Gtk.Image.new_from_icon_name(Gtk.STOCK_QUIT, Gtk.IconSize.MENU))
         quit_item.connect("activate", self._on_quit)
@@ -249,177 +320,276 @@ class TailscaleTray:
 
         self.menu.show_all()
         self.indicator.set_menu(self.menu)
-        self._update_ui()
-        log(f"Started, exit_node='{self.exit_node}', state: {'connected' if self.connected else 'disconnected'}")
 
     def _connect_label(self):
-        if self.exit_node:
-            return f"Connect to {self.exit_node}"
-        return "Connect (not configured)"
+        target = self.settings.get("exit_node", "")
+        if target:
+            return f"Connect to {target}"
+        return "Connect Default Exit Node"
 
-    def _run_elevated(self, tailscale_args, callback=None):
-        """Run tailscale as root. Tries sudo (NOPASSWD), falls back to pkexec (graphical prompt)."""
-        log(f"Elevated: {TAILSCALE_BIN} {' '.join(tailscale_args)}")
+    def _run_async_command(self, cmd, callback, timeout=30):
+        """Run shell command in background thread without blocking GTK UI."""
+        def _worker():
+            res = self._execute_cmd(cmd, timeout=timeout)
+            GLib.idle_add(callback, *res)
 
-        if callback is None:
-            callback = lambda *a: None
+        threading.Thread(target=_worker, daemon=True).start()
 
-        def _thread():
-            # Try 1: sudo (non-interactive) - works when sudoers NOPASSWD rule is present
+    def _run_elevated_async(self, tailscale_args, callback):
+        """Run tailscale as root asynchronously using sudo (NOPASSWD) or pkexec."""
+        def _worker():
             cmd = ["sudo", "-n", TAILSCALE_BIN] + tailscale_args
-            res = self._execute_list(cmd)
+            res = self._execute_cmd(cmd, timeout=30)
             if res[0] == 0:
                 GLib.idle_add(callback, *res)
                 return
 
-            # Try 2: pkexec (graphical auth prompt) - works without pre-config, on any distro
-            log("sudo failed/prompt required, falling back to pkexec...")
+            log("sudo failed or required password, falling back to pkexec...")
             pcmd = ["pkexec", TAILSCALE_BIN] + tailscale_args
-            res2 = self._execute_list(pcmd, timeout=60)
+            res2 = self._execute_cmd(pcmd, timeout=60)
             GLib.idle_add(callback, *res2)
 
-        threading.Thread(target=_thread, daemon=True).start()
+        threading.Thread(target=_worker, daemon=True).start()
 
-    def _execute_list(self, cmd, timeout=30):
+    def _execute_cmd(self, cmd, timeout=30):
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=timeout
             )
-            log(f"Exit code: {result.returncode}")
-            if result.stdout.strip():
-                log(f"stdout: {result.stdout.strip()[:500]}")
-            if result.stderr.strip():
-                log(f"stderr: {result.stderr.strip()[:500]}")
             return (result.returncode, result.stdout.strip(), result.stderr.strip())
         except subprocess.TimeoutExpired:
-            log("Command timed out")
             return (-1, "", "Command timed out")
         except Exception as e:
-            log(f"Exception: {e}")
             return (-1, "", str(e))
 
-    def _check_real_status(self):
-        try:
-            result = subprocess.run(
-                [TAILSCALE_BIN, "status", "--json"],
-                capture_output=True, text=True, timeout=10
-            )
-            if result.returncode != 0:
-                log(f"tailscale status failed: {result.stderr}")
-                self.connected = False
-                self.current_node = None
-                return
+    def _periodic_status_check(self):
+        if not self.is_operating:
+            self._async_check_status()
+        return True # Continue polling
 
-            data = json.loads(result.stdout)
+    def _async_check_status(self, first_run=False):
+        cmd = [TAILSCALE_BIN, "status", "--json"]
+        self._run_async_command(cmd, lambda rc, stdout, stderr: self._parse_status_result(rc, stdout, stderr, first_run))
+
+    def _parse_status_result(self, returncode, stdout, stderr, first_run=False):
+        if returncode != 0:
+            log(f"Status command failed: {stderr}")
+            self.tailscale_online = False
+            self.connected = False
+            self.current_node = None
+            self.discovered_nodes = []
+            self._update_ui()
+            return
+
+        try:
+            data = json.loads(stdout)
+            backend_state = data.get("BackendState", "")
+            self.tailscale_online = (backend_state == "Running")
+            
+            # Current device IP & tailnet info
+            self_node = data.get("Self") or {}
+            ips = self_node.get("TailscaleIPs") or []
+            self.my_ip = ips[0] if ips else ""
+            self.tailnet_name = data.get("MagicDNSSuffix", "")
+
+            # Exit node status
             en = data.get("ExitNodeStatus")
             self.connected = bool(en)
 
+            current_exit_ip = None
             if en:
-                ips = en.get("TailscaleIPs") or []
-                self.current_node = ips[0].split("/")[0] if ips else "unknown"
+                en_ips = en.get("TailscaleIPs") or []
+                current_exit_ip = en_ips[0].split("/")[0] if en_ips else None
+                self.current_node = en.get("HostName") or current_exit_ip or "unknown"
             else:
                 self.current_node = None
 
-            log(f"Status check: connected={self.connected}, node={self.current_node}")
+            # Auto-discover peers that can act as exit nodes
+            peers = data.get("Peer") or {}
+            nodes = []
+            for node_key, peer in peers.items():
+                is_exit_option = peer.get("ExitNodeOption", False) or peer.get("ExitNode", False)
+                if is_exit_option:
+                    hostname = peer.get("HostName") or peer.get("DNSName", "").split(".")[0] or "Unknown Node"
+                    p_ips = peer.get("TailscaleIPs") or []
+                    p_ip = p_ips[0] if p_ips else ""
+                    online = peer.get("Online", False)
+                    is_curr = (current_exit_ip and p_ip == current_exit_ip) or (self.current_node and hostname == self.current_node)
+                    nodes.append({
+                        "name": hostname,
+                        "ip": p_ip,
+                        "online": online,
+                        "is_current": is_curr
+                    })
+
+            self.discovered_nodes = nodes
+            self._update_ui()
+
+            # Perform auto-connect on startup if configured
+            if first_run and self.settings.get("auto_connect") and not self.connected and self.settings.get("exit_node"):
+                log("Auto-connect triggered on launch.")
+                self._connect_to_node(self.settings.get("exit_node"))
 
         except json.JSONDecodeError as e:
-            log(f"JSON error: {e}")
+            log(f"Status JSON error: {e}")
+            self.tailscale_online = False
             self.connected = False
-            self.current_node = None
-        except Exception as e:
-            log(f"Status error: {e}")
-            self.connected = False
-            self.current_node = None
-
-    def _status_text(self):
-        if self.connected:
-            node = self.current_node or "unknown"
-            return f"Connected to {node}"
-        return "Disconnected"
+            self._update_ui()
 
     def _update_ui(self):
-        if self.connected:
+        if not self.tailscale_online:
+            self.indicator.set_icon_full(ICON_DISCONNECTED, "Tailscale Offline")
+            self.status_item.set_label("Status: Tailscale Offline / Stopped")
+        elif self.connected:
             self.indicator.set_icon_full(ICON_CONNECTED, "Connected")
-            self.status_item.set_label(f"Status: {self._status_text()}")
+            self.status_item.set_label(f"Status: Connected ({self.current_node})")
         else:
             self.indicator.set_icon_full(ICON_DISCONNECTED, "Disconnected")
-            self.status_item.set_label("Status: Disconnected")
+            self.status_item.set_label("Status: Tailscale Online (Direct)")
 
-        if self.exit_node:
-            self.connect_item.set_label(self._connect_label())
-            self.connect_item.set_sensitive(not self.connected)
-            self.disconnect_item.set_sensitive(self.connected)
+        self.connect_item.set_label(self._connect_label())
+        self.connect_item.set_sensitive(self.tailscale_online and not self.is_operating and not self.connected)
+        self.disconnect_item.set_sensitive(self.tailscale_online and not self.is_operating and self.connected)
+        self.lan_item.set_sensitive(not self.is_operating)
+
+        self._rebuild_exit_nodes_submenu()
+
+    def _rebuild_exit_nodes_submenu(self):
+        # Clear existing items
+        for child in self.exit_nodes_submenu.get_children():
+            self.exit_nodes_submenu.remove(child)
+
+        if not self.discovered_nodes:
+            item = Gtk.MenuItem(label="No exit nodes found in tailnet")
+            item.set_sensitive(False)
+            self.exit_nodes_submenu.append(item)
         else:
-            self.connect_item.set_sensitive(False)
-            self.disconnect_item.set_sensitive(self.connected)
+            group = None
+            # Option: Disconnect / Direct connection
+            off_item = Gtk.RadioMenuItem.new_with_label(group, "Direct (No Exit Node)")
+            group = off_item.get_group()
+            if not self.connected:
+                off_item.set_active(True)
+            off_item.connect("activate", self._on_select_off)
+            self.exit_nodes_submenu.append(off_item)
 
-    def _on_connect(self, widget):
-        if not self.exit_node:
-            self._notify("No Exit Node", "Set an exit node in Settings first")
+            self.exit_nodes_submenu.append(Gtk.SeparatorMenuItem())
+
+            for node in self.discovered_nodes:
+                status_icon = "🟢" if node["online"] else "⚪"
+                label_text = f"{status_icon} {node['name']} ({node['ip']})"
+                n_item = Gtk.RadioMenuItem.new_with_label(group, label_text)
+                group = n_item.get_group()
+
+                if node["is_current"]:
+                    n_item.set_active(True)
+
+                target_ip = node["ip"] or node["name"]
+                n_item.connect("activate", self._on_select_node_menu, target_ip)
+                self.exit_nodes_submenu.append(n_item)
+
+        self.exit_nodes_submenu.append(Gtk.SeparatorMenuItem())
+        custom_item = Gtk.MenuItem(label="Enter Custom IP/Hostname...")
+        custom_item.connect("activate", self._on_config)
+        self.exit_nodes_submenu.append(custom_item)
+
+        self.exit_nodes_submenu.show_all()
+
+    def _on_select_off(self, widget):
+        if widget.get_active() and self.connected and not self.is_operating:
+            self._on_disconnect(widget)
+
+    def _on_select_node_menu(self, widget, target_ip):
+        if widget.get_active() and not self.is_operating:
+            if self.current_node != target_ip and target_ip:
+                self._connect_to_node(target_ip)
+
+    def _on_toggle_lan(self, widget):
+        new_val = widget.get_active()
+        self.settings["allow_lan"] = new_val
+        save_config(self.settings)
+        log(f"Allow LAN toggled to: {new_val}")
+        
+        # If currently connected, re-apply set command with new LAN option
+        if self.connected and self.current_node and not self.is_operating:
+            self._connect_to_node(self.current_node)
+
+    def _on_connect_default(self, widget):
+        target = self.settings.get("exit_node", "")
+        if not target:
+            self._notify("No Exit Node Configured", "Opening settings to set an exit node IP...")
             self._on_config(None)
             return
-        log("=== CONNECT ===")
-        self.connect_item.set_sensitive(False)
-        self.disconnect_item.set_sensitive(False)
-        self.indicator.set_icon_full(ICON_CONNECTING, "Connecting...")
-        self._run_elevated(["set", f"--exit-node={self.exit_node}"], self._on_connect_done)
+        self._connect_to_node(target)
 
-    def _on_connect_done(self, returncode, stdout, stderr):
-        if returncode == 0:
-            GLib.timeout_add(2000, self._verify_after_connect)
+    def _connect_to_node(self, exit_node_target):
+        if self.is_operating:
+            return
+        log(f"=== CONNECT TO {exit_node_target} ===")
+        self.is_operating = True
+        self.indicator.set_icon_full(ICON_CONNECTING, "Connecting...")
+        
+        args = ["set", f"--exit-node={exit_node_target}"]
+        if self.settings.get("allow_lan", False):
+            args.append("--exit-node-allow-lan-access=true")
         else:
-            self._notify("Connection Failed", stderr or "Error")
-            self._check_real_status()
-            self._update_ui()
+            args.append("--exit-node-allow-lan-access=false")
+
+        self._run_elevated_async(args, lambda rc, stdout, stderr: self._on_connect_done(rc, stdout, stderr, exit_node_target))
+
+    def _on_connect_done(self, returncode, stdout, stderr, target):
+        self.is_operating = False
+        if returncode == 0:
+            self.settings["exit_node"] = target
+            save_config(self.settings)
+            GLib.timeout_add(1500, self._verify_after_connect)
+        else:
+            self._notify("Connection Failed", stderr or "Error setting exit node")
+            self._async_check_status()
 
     def _verify_after_connect(self):
-        self._check_real_status()
-        self._update_ui()
+        self._async_check_status()
         if self.connected:
-            self._notify("Connected", f"Exit node: {self.current_node}")
+            self._notify("Connected to Exit Node", f"Node: {self.current_node or self.settings.get('exit_node')}")
         else:
-            self._notify("Warning", "Command OK but status shows disconnected")
+            self._notify("Connection Status", "Waiting for Tailscale connection to establish...")
         return False
 
-    def _on_disconnect(self, widget):
+    def _on_disconnect(self, widget=None):
+        if self.is_operating:
+            return
         log("=== DISCONNECT ===")
-        self.connect_item.set_sensitive(False)
-        self.disconnect_item.set_sensitive(False)
+        self.is_operating = True
         self.indicator.set_icon_full(ICON_CONNECTING, "Disconnecting...")
-        self._run_elevated(["set", "--exit-node="], self._on_disconnect_done)
+        args = ["set", "--exit-node="]
+        self._run_elevated_async(args, self._on_disconnect_done)
 
     def _on_disconnect_done(self, returncode, stdout, stderr):
+        self.is_operating = False
         if returncode == 0:
-            GLib.timeout_add(2000, self._verify_after_disconnect)
+            GLib.timeout_add(1500, self._verify_after_disconnect)
         else:
-            self._notify("Disconnection Failed", stderr or "Error")
-            self._check_real_status()
-            self._update_ui()
+            self._notify("Disconnection Failed", stderr or "Error clearing exit node")
+            self._async_check_status()
 
     def _verify_after_disconnect(self):
-        self._check_real_status()
-        self._update_ui()
+        self._async_check_status()
         if not self.connected:
-            self._notify("Disconnected", "Exit node cleared")
+            self._notify("Disconnected", "Exit node cleared. Using direct connection.")
         else:
-            self._notify("Warning", "Command OK but still shows connected")
+            self._notify("Warning", "Disconnect command sent, updating status...")
         return False
 
-    def _on_check(self, widget):
-        log("=== REFRESH ===")
-        self._check_real_status()
-        self._update_ui()
-
     def _on_config(self, widget):
-        dialog = ConfigDialog(None, self.exit_node)
+        dialog = ConfigDialog(None, self.settings)
         result = dialog.run()
         if result is not None:
-            if save_config(result):
-                self.exit_node = result
+            self.settings.update(result)
+            if save_config(self.settings):
                 self._update_ui()
-                self._notify("Config Saved", f"Exit node set to: '{result or '(empty)'}'")
+                self._notify("Settings Saved", f"Default exit node: '{self.settings['exit_node'] or '(none)'}'")
             else:
-                self._notify("Error", "Could not save config")
+                self._notify("Error", "Could not save settings to config file")
 
     def _on_about(self, widget):
         dlg = Gtk.MessageDialog(
@@ -430,8 +600,8 @@ class TailscaleTray:
         )
         dlg.format_secondary_markup(
             "<b>Tailscale Tray Manager</b>\n\n"
-            "A simple system tray app to manage your Tailscale\n"
-            "VPN exit node.\n\n"
+            "A lightweight system tray application to manage your Tailscale\n"
+            "VPN exit node with auto-discovery & LAN access options.\n\n"
             f"Config: <span font_family='monospace'>{CONFIG_FILE}</span>\n"
             f"Log: <span font_family='monospace'>{LOG_FILE}</span>"
         )
@@ -447,13 +617,16 @@ class TailscaleTray:
             log(f"Notify failed: {e}")
 
     def _on_quit(self, widget):
+        if self.settings.get("disconnect_on_quit") and self.connected:
+            log("Disconnect on quit enabled. Clearing exit node...")
+            self._execute_cmd(["sudo", "-n", TAILSCALE_BIN, "set", "--exit-node="])
         Notify.uninit()
         Gtk.main_quit()
 
 
 def main():
     ensure_config_file()
-    log("=== Starting ===")
+    log("=== Starting Tailscale Tray ===")
     signal.signal(signal.SIGTERM, lambda s, f: Gtk.main_quit())
     TailscaleTray()
     Gtk.main()

@@ -140,7 +140,7 @@ fi
 # build the sudoers content with detected groups (no "NOPASSWD" markers stripped)
 SUDOERS_CONTENT="# Created by Tailscale Tray installer $(date)
 # Allows running 'tailscale set' without a password for tray app.
-${ADMIN_GROUPS# } ALL=(root) NOPASSWD: /usr/bin/tailscale set *
+${ADMIN_GROUPS# } ALL=(root) NOPASSWD: /usr/bin/tailscale set *, /usr/local/bin/tailscale set *, /bin/tailscale set *
 "
 printf '%s' "$SUDOERS_CONTENT" > /etc/sudoers.d/tailscale-tray
 chmod 440 /etc/sudoers.d/tailscale-tray

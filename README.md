@@ -1,6 +1,6 @@
 # Tailscale Tray Manager
 
-A lightweight, powerful system tray application for Linux to manage your **Tailscale VPN exit node** with a single click.
+A lightweight, powerful system tray application for Linux to manage your **Tailscale VPN exit node** with auto-discovery, LAN access controls, and non-blocking background monitoring.
 
 ![Platform: Linux](https://img.shields.io/badge/platform-Linux-blue) ![Python](https://img.shields.io/badge/python-3.x-green)
 
@@ -8,33 +8,27 @@ A lightweight, powerful system tray application for Linux to manage your **Tails
 
 ## ✨ Features
 
-- 🖥️ Runs in the system tray (top panel / notification area)
-- ⚡ One-click **Connect** / **Disconnect** of your Tailscale exit node
-- 🎛️ **Graphical Settings window** to configure your exit node IP (no manual file editing needed)
-- 🔍 Real status verification using `tailscale status --json` (accurate, no guessing)
-- 🔔 Desktop notifications on connect/disconnect/errors
-- 🔄 Auto-starts on login via systemd
-- 📝 Full logging for easy debugging
-- 🐧 Works on **Fedora, Ubuntu, Debian, Arch, openSUSE** and most distros
+- 🖥️ **Runs in System Tray**: Smooth integration with top panel / notification area across all Linux Desktop Environments (GNOME, KDE Plasma, XFCE, Cinnamon, MATE, etc.).
+- 🌐 **Exit Node Auto-Discovery**: Automatically lists all available exit nodes in your tailnet with live online status indicators (🟢 Online / ⚪ Offline). Switch between exit nodes with a single click from the **Exit Nodes** submenu.
+- ⚡ **One-Click Connect / Disconnect**: Quick toggle for your default exit node or custom IPs.
+- 🛡️ **LAN Access Control**: Easily toggle local network access (`--exit-node-allow-lan-access`) directly from the menu or settings.
+- 🚀 **Non-Blocking UI**: Asynchronous thread execution prevents GTK UI freezes during network operations.
+- 🔄 **Periodic Background Status Polling**: Automatically checks status every 5 seconds without user intervention.
+- 🎛️ **Graphical Settings Window**: Configure default exit node, auto-connect on boot, LAN access, and quit options.
+- 🔔 **Desktop Notifications**: Real-time notifications for connections, disconnections, and status changes.
+- 🔐 **Zero-Password Elevation**: Auto-detects sudoers rules and falls back smoothly to PolicyKit (`pkexec`) graphical auth prompt if needed.
+- 🔄 **Auto-Start**: Systemd user service auto-starts on login.
 
 ---
 
-## ⚠️ Prerequisites (IMPORTANT — read first)
+## ⚠️ Prerequisites
 
-Before installing, you must have:
-
-1. **Tailscale installed** on this machine, on your tailnet, and logged in (`tailscale up`).
-   - Install Tailscale: https://tailscale.com/download
-2. **An exit node** must already be enabled on a **remote/external server** in your tailnet.
-   - On that server (must be in a different location than you, ideally a VPS):
-     ```bash
-     sudo tailscale up --advertise-exit-node
-     ```
-   - Then approve/allow it as an exit node in the Tailscale admin console:
-     https://login.tailscale.com/admin/dns
-3. The **IP address** (e.g. `100.82.248.81`) or hostname of that exit-node server — you'll enter this in the app's Settings.
-
-> ⚠️ **The exit node must be a SEPARATE machine (e.g. a VPS/cloud server), not your own computer.** Running it on the same machine you're on makes no sense for VPN exit traffic.
+1. **Tailscale installed** on this machine and logged in (`tailscale up`).
+2. **An exit node** enabled on a remote server in your tailnet:
+   ```bash
+   sudo tailscale up --advertise-exit-node
+   ```
+   and approved in the [Tailscale Admin Console](https://login.tailscale.com/admin/dns).
 
 ---
 
@@ -48,117 +42,66 @@ cd tailscale-tray
 sudo ./install.sh
 ```
 
-The installer **auto-detects your distro** (Fedora, Ubuntu, Debian, Arch, openSUSE...) and installs the correct dependencies — and can even install Tailscale for you if it's missing.
-
 ### Method 2 — Quick install (one-liner)
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/sasm110313/tailscale-tray/refs/heads/master/setup.sh)
 ```
 
-The one-liner downloads `setup.sh`, clones the repo, and runs the same installation automatically. Needs `git` + `curl`.
-
 ---
 
 ## 🛠️ Usage
 
-1. After install, the tray icon appears in your top panel.
-2. **Right-click the tray icon** → **Settings...**
-3. Enter your exit node's **IP address** (e.g. `100.82.248.81`) and click **Save**.
-4. Now click **"Connect to 100.82.248.81"** — your VPN is on.
-5. To turn it off, click **"Disconnect Exit Node"**.
+1. **Exit Nodes Submenu**: Right-click the tray icon and select **Exit Nodes** to choose any auto-discovered node in your tailnet.
+2. **Quick Connect**: Click **"Connect to <node>"** to activate your default exit node.
+3. **Allow Local Network Access**: Check **"Allow Local Network (LAN) Access"** to keep access to local devices (printers, local routers, etc.) while connected to the VPN.
+4. **Settings...**: Open the GUI settings window to change startup preferences or set a default exit node IP (`e.g. 100.64.0.1`).
 
-### Tray menu options
+### Tray Menu Overview
 
 | Menu item | Action |
 |-----------|--------|
-| **Connect to &lt;node&gt;** | Sets the exit node (VPN on) |
-| **Disconnect Exit Node** | Clears the exit node (VPN off) |
-| **Settings...** | Opens the GUI config window |
-| **Refresh Status** | Re-checks actual Tailscale status |
-| **About** | Shows config & log paths |
-| **Quit** | Closes the app |
+| **Status** | Shows current connection state, active node name, and IP |
+| **Exit Nodes ➔** | Submenu listing all discovered exit nodes (click any to switch) |
+| **Allow Local Network Access** | Checkbox toggle for LAN access (`--exit-node-allow-lan-access`) |
+| **Connect to &lt;node&gt;** | Connects to configured default exit node |
+| **Disconnect Exit Node** | Clears active exit node (returns to direct connection) |
+| **Settings...** | Opens GUI configuration dialog |
+| **Refresh Status** | Manually triggers status refresh |
+| **About** | Shows version, config, and log paths |
+| **Quit** | Exit the tray app (optionally disconnects exit node) |
 
 ---
 
 ## ⚙️ Configuration
 
-You can configure via the **GUI** (recommended) or the config file directly:
-
-```bash
-nano ~/.config/tailscale-tray/config.conf
-```
+Config file: `~/.config/tailscale-tray/config.conf`
 
 ```ini
 [tailscale]
-exit_node = 100.82.248.81
-```
+exit_node = 100.64.0.1
+allow_lan = false
+auto_connect = false
 
-Leave `exit_node` empty to disable. After editing the file, restart the service or click **Settings...** (it reloads the config).
+[options]
+disconnect_on_quit = false
+```
 
 **Log file:** `~/.config/tailscale-tray/tailscale-tray.log`
 
 ---
 
-## 🔐 Root access (auto-handled)
-
-The app needs root to run `tailscale set`. It handles this automatically on **any** system with a two-step fallback:
-
-1. **`sudo -n`** — works immediately when the installer's sudoers rule is present (no password prompt).
-2. **`pkexec`** — if sudo needs a password (e.g. no NOPASSWD rule), the app auto-falls back to a **graphical password prompt** via polkit. No manual config needed.
-
-The installer adds `/etc/sudoers.d/tailscale-tray`, which automatically:
-- Detects the correct admin group (`wheel`, `sudo`, or `admin`)
-- Adds the installing user to that group if they're not already in one
-- Allows running only `tailscale set` without a password (safe, scoped)
-
----
-
-## 📦 Manage the service
+## 📦 Manage the Service
 
 ```bash
-# Check status
+# Status
 systemctl --user status tailscale-tray.service
 
-# Restart (after editing config file)
+# Restart
 systemctl --user restart tailscale-tray.service
 
-# Stop
-systemctl --user stop tailscale-tray.service
-
-# Start
-systemctl --user start tailscale-tray.service
-
-# Watch logs live
+# Logs
 tail -f ~/.config/tailscale-tray/tailscale-tray.log
-```
-
-The service starts **automatically on login**.
-
----
-
-## 🔧 Manual dependency installation
-
-If the installer's auto-detection didn't work, install these manually:
-
-### Fedora / RHEL / CentOS
-```bash
-sudo dnf install python3-gobject gtk3 libayatana-appindicator-gtk3 libnotify
-```
-
-### Ubuntu / Debian
-```bash
-sudo apt install python3-gi gir1.2-gtk-3.0 gir1.2-appindicator3-0.1 gir1.2-notify-0.7
-```
-
-### Arch
-```bash
-sudo pacman -S python-gobject gtk3 libayatana-appindicator libnotify
-```
-
-### openSUSE
-```bash
-sudo zypper install python3-gobject gtk3 typelib-1_0-AppIndicator3-0_1 typelib-1_0-Notify-0_7
 ```
 
 ---
@@ -168,24 +111,6 @@ sudo zypper install python3-gobject gtk3 typelib-1_0-AppIndicator3-0_1 typelib-1
 ```bash
 sudo ./uninstall.sh
 ```
-
-Your config file is kept at `~/.config/tailscale-tray/` — delete it manually if you want it gone.
-
----
-
-## 🐛 Troubleshooting
-
-**The icon doesn't appear in the tray?**
-```bash
-systemctl --user status tailscale-tray.service
-tail -f ~/.config/tailscale-tray/tailscale-tray.log
-```
-Make sure you have an appindicator extension (e.g. `gnome-shell-extension-appindicator` on GNOME).
-
-**"Connection failed"?**
-- Confirm Tailscale is running: `systemctl status tailscaled`
-- Confirm you're logged in: `tailscale status`
-- Check the exit node is advertised & approved on the remote server.
 
 ---
 
