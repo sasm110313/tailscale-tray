@@ -53,7 +53,7 @@ The installer **auto-detects your distro** (Fedora, Ubuntu, Debian, Arch, openSU
 ### Method 2 — Quick install (one-liner)
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/sasm110313/tailscale-tray/main/setup.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/sasm110313/tailscale-tray/refs/heads/master/setup.sh)
 ```
 
 The one-liner downloads `setup.sh`, clones the repo, and runs the same installation automatically. Needs `git` + `curl`.
