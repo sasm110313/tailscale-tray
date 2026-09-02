@@ -7,6 +7,9 @@ auto-discover exit nodes in your tailnet, toggle LAN access, and monitor status.
 Config file: ~/.config/tailscale-tray/config.conf
 """
 
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('AppIndicator3', '0.1')
@@ -132,6 +135,18 @@ def save_config(settings):
         return False
 
 
+def make_icon_menu_item(label_text, icon_name):
+    """Create a modern Gtk.MenuItem containing an icon and label without deprecation warnings."""
+    item = Gtk.MenuItem()
+    box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+    image = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.MENU)
+    label = Gtk.Label(label=label_text)
+    box.pack_start(image, False, False, 0)
+    box.pack_start(label, False, False, 0)
+    item.add(box)
+    return item, label
+
+
 class ConfigDialog:
     """A GTK dialog for editing configuration settings."""
 
@@ -153,8 +168,8 @@ class ConfigDialog:
         box.set_spacing(12)
         box.set_margin_top(14)
         box.set_margin_bottom(14)
-        box.set_margin_left(16)
-        box.set_margin_right(16)
+        box.set_margin_start(16)
+        box.set_margin_end(16)
 
         # Title
         title = Gtk.Label()
@@ -278,43 +293,37 @@ class TailscaleTray:
         self.menu.append(Gtk.SeparatorMenuItem())
 
         # Quick Connect/Disconnect Items
-        self.connect_item = Gtk.ImageMenuItem(label=self._connect_label())
-        self.connect_item.set_image(Gtk.Image.new_from_icon_name(CONNECT_ICON, Gtk.IconSize.MENU))
+        self.connect_item, self.connect_label = make_icon_menu_item(self._connect_label(), CONNECT_ICON)
         self.connect_item.connect("activate", self._on_connect_default)
         self.menu.append(self.connect_item)
 
-        self.disconnect_item = Gtk.ImageMenuItem(label="Disconnect Exit Node")
-        self.disconnect_item.set_image(Gtk.Image.new_from_icon_name(DISCONNECT_ICON, Gtk.IconSize.MENU))
+        self.disconnect_item, _ = make_icon_menu_item("Disconnect Exit Node", DISCONNECT_ICON)
         self.disconnect_item.connect("activate", self._on_disconnect)
         self.menu.append(self.disconnect_item)
 
         self.menu.append(Gtk.SeparatorMenuItem())
 
         # Settings
-        config_item = Gtk.ImageMenuItem(label="Settings...")
-        config_item.set_image(Gtk.Image.new_from_icon_name(Gtk.STOCK_PREFERENCES, Gtk.IconSize.MENU))
+        config_item, _ = make_icon_menu_item("Settings...", Gtk.STOCK_PREFERENCES)
         config_item.connect("activate", self._on_config)
         self.menu.append(config_item)
 
         # Refresh
-        check_item = Gtk.ImageMenuItem(label="Refresh Status")
-        check_item.set_image(Gtk.Image.new_from_icon_name(Gtk.STOCK_REFRESH, Gtk.IconSize.MENU))
+        check_item, _ = make_icon_menu_item("Refresh Status", Gtk.STOCK_REFRESH)
         check_item.connect("activate", lambda w: self._async_check_status())
         self.menu.append(check_item)
 
         self.menu.append(Gtk.SeparatorMenuItem())
 
         # About
-        about_item = Gtk.ImageMenuItem(label="About")
-        about_item.set_image(Gtk.Image.new_from_icon_name(Gtk.STOCK_ABOUT, Gtk.IconSize.MENU))
+        about_item, _ = make_icon_menu_item("About", Gtk.STOCK_ABOUT)
         about_item.connect("activate", self._on_about)
         self.menu.append(about_item)
 
         self.menu.append(Gtk.SeparatorMenuItem())
 
         # Quit
-        quit_item = Gtk.ImageMenuItem(label="Quit")
-        quit_item.set_image(Gtk.Image.new_from_icon_name(Gtk.STOCK_QUIT, Gtk.IconSize.MENU))
+        quit_item, _ = make_icon_menu_item("Quit", Gtk.STOCK_QUIT)
         quit_item.connect("activate", self._on_quit)
         self.menu.append(quit_item)
 
@@ -447,7 +456,7 @@ class TailscaleTray:
             self.indicator.set_icon_full(ICON_DISCONNECTED, "Disconnected")
             self.status_item.set_label("Status: Tailscale Online (Direct)")
 
-        self.connect_item.set_label(self._connect_label())
+        self.connect_label.set_text(self._connect_label())
         self.connect_item.set_sensitive(self.tailscale_online and not self.is_operating and not self.connected)
         self.disconnect_item.set_sensitive(self.tailscale_online and not self.is_operating and self.connected)
         self.lan_item.set_sensitive(not self.is_operating)
