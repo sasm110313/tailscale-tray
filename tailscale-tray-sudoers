@@ -1,0 +1,5 @@
+# Reference template — install.sh generates the actual rule at /etc/sudoers.d/tailscale-tray
+# automatically, detecting the correct admin group (wheel/sudo/admin) on any distro.
+# This lets the tray app connect/disconnect the exit node without a password prompt.
+%wheel ALL=(root) NOPASSWD: /usr/bin/tailscale set *
+%sudo  ALL=(root) NOPASSWD: /usr/bin/tailscale set *
