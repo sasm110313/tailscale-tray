@@ -2,15 +2,16 @@
 Description=Tailscale Tray Manager
 After=graphical-session.target tailscaled.service
 Wants=tailscaled.service
+PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /usr/local/bin/tailscale-tray.py
+ExecStart=/usr/bin/python3 %h/Documents/tailscale-tray/tailscale-tray.py
 Restart=on-failure
 RestartSec=5
 Environment=DISPLAY=:0
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
-XDG_RUNTIME_DIR=/run/user/%U
+Environment=XDG_RUNTIME_DIR=/run/user/%U
 
 [Install]
-WantedBy=graphical-session.target
+WantedBy=graphical-session.target default.target
